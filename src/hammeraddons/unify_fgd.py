@@ -1245,6 +1245,7 @@ def action_export(
     engine_mode: bool,
     map_size: int = MAP_SIZE_DEFAULT,
     srctools_only: bool = False,
+    srctools_only_extend: bool = False,
     collapse_bases: bool = False
 ) -> None:
     """Create an FGD file using the given tags."""
@@ -1425,16 +1426,44 @@ def action_export(
         ents = list(fgd.entities.values())
         fgd.entities.clear()
 
-        for ent in ents:
+        for e in ents:
+            ent = e
+
             applies_to = get_appliesto(ent)
             if match_tags(tags, applies_to):
                 # For the srctools_only flag, only allow ents which match the regular
                 # tags, but do not match those minus srctools.
+                
                 if srctools_tags is not None and match_tags(srctools_tags, applies_to):
                     # Always include base entities, those get culled later.
                     # _CBaseEntity_ is required for engine definitions.
                     if ent.type is not EntityTypes.BASE and ent is not base_entity_def:
-                        continue
+                        
+                        if srctools_only_extend:
+                            # We want to tweak the entity, making a new copy that only contains SRCTOOLS tagged entries
+                            extend_any = False
+                            extend_ent = EntityDef(type=EntityTypes.EXTEND, classname=ent.classname)
+                            for attr_name in ('keyvalues', 'inputs', 'outputs'):
+                                old_cat = getattr(ent, attr_name)
+                                new_cat = getattr(extend_ent, attr_name)
+                                for key, tag_map in old_cat.items():
+                                    for tag, value in tag_map.items():
+                                        if 'SRCTOOLS' not in tag and '+SRCTOOLS' not in tag:
+                                            # Ignoring all non-SRCTOOLS tags!
+                                            continue
+                                        # Track it!
+                                        if key not in new_cat.keys():
+                                            new_cat[key] = {}
+                                        new_cat[key][add_tag(tag, '+SRCTOOLS')] = value
+                                        extend_any = True
+                            # Replace it with our new one in the final output
+                            if extend_any:
+                                ent = extend_ent
+                            else:
+                                continue
+                        else:
+                            continue
+
 
                 fgd.entities[ent.classname] = ent
                 ent.strip_tags(tags)
@@ -1691,6 +1720,12 @@ def main(args: list[str] | None = None) -> None:
         action="store_true",
         help='Export "comp" entities.',
     )
+    parser_exp.add_argument(
+        "--srctools_only_extend",
+        default=False,
+        action="store_true",
+        help='Export "comp" entities, but use @ExtendClass for differences with entities that are not exclusive to the target.',
+    )
 
     parser_imp = subparsers.add_parser(
         "import",
@@ -1768,6 +1803,7 @@ def main(args: list[str] | None = None) -> None:
             result.engine,
             result.map_size,
             result.srctools_only,
+            result.srctools_only_extend,
             result.collapse_bases,
         )
     elif result.mode in ("c", "count"):
