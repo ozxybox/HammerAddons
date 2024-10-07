@@ -1433,46 +1433,49 @@ def action_export(
             if match_tags(tags, applies_to):
                 # For the srctools_only flag, only allow ents which match the regular
                 # tags, but do not match those minus srctools.
-                
-                if srctools_tags is not None and match_tags(srctools_tags, applies_to):
-                    # Always include base entities, those get culled later.
-                    # _CBaseEntity_ is required for engine definitions.
-                    if ent.type is not EntityTypes.BASE and ent is not base_entity_def:
-                        
-                        if srctools_only_extend:
-                            # We want to tweak the entity, making a new copy that only contains SRCTOOLS tagged entries
-                            extend_any = False
-                            extend_ent = EntityDef(type=EntityTypes.EXTEND, classname=ent.classname)
-                            for attr_name in ('keyvalues', 'inputs', 'outputs'):
-                                old_cat = getattr(ent, attr_name)
-                                new_cat = getattr(extend_ent, attr_name)
-                                for key, tag_map in old_cat.items():
-                                    for tag, value in tag_map.items():
-                                        if 'SRCTOOLS' not in tag and '+SRCTOOLS' not in tag:
-                                            # Ignoring all non-SRCTOOLS tags!
-                                            continue
-                                        # Track it!
-                                        if key not in new_cat.keys():
-                                            new_cat[key] = {}
-                                        new_cat[key][add_tag(tag, '+SRCTOOLS')] = value
-                                        extend_any = True
-                            # Replace it with our new one in the final output
-                            if extend_any:
-                                ent = extend_ent
-                            else:
-                                continue
-                        else:
+                if srctools_only_extend:
+                    should_include = False
+                    if not match_tags(srctools_tags, applies_to):
+                        should_include = True
+                        print(srctools_tags)
+                        print(applies_to)
+                        print("GOT IT!\t", ent.classname)
+                    else:
+                        for attr_name in ('keyvalues', 'inputs', 'outputs'):
+                            old_cat = getattr(ent, attr_name)
+                            for key, tag_map in old_cat.items():
+                                for tag, value in tag_map.items():
+                                    if 'SRCTOOLS' not in tag and '+SRCTOOLS' not in tag:
+                                        # Ignoring all non-SRCTOOLS tags!
+                                        continue
+                                    should_include = True
+                                    break
+                                if should_include:
+                                    break
+                            if should_include:
+                                break
+                    if not should_include:
+                        continue
+                else:
+                    if srctools_tags is not None and match_tags(srctools_tags, applies_to):
+                        # Always include base entities, those get culled later.
+                        # _CBaseEntity_ is required for engine definitions.
+                        if ent.type is not EntityTypes.BASE and ent is not base_entity_def:
                             continue
 
 
                 fgd.entities[ent.classname] = ent
-                ent.strip_tags(tags)
+                
+                if not srctools_only_extend:
+                    ent.strip_tags(tags)
 
             # Remove bases that don't apply.
             for base in ent.bases[:]:
                 assert isinstance(base, EntityDef)
                 if not match_tags(tags, get_appliesto(base)):
                     ent.bases.remove(base)
+
+            
 
     if not engine_mode:
         print('Applying polyfills:')
@@ -1482,6 +1485,81 @@ def action_export(
                 polyfill(fgd)
             else:
                 print(f' - {polyfill.__name__[10:]}: Not required')
+
+
+    if srctools_only_extend:
+        print('Converting entities into extensions...')
+        for classname, ent in list(fgd.entities.items()):
+            # We want to tweak the entity, making a new copy that only contains SRCTOOLS tagged entries
+            extend_any = False
+            applies_to = get_appliesto(ent)
+            from_srctools = False
+            for tag in applies_to:
+                if "SRCTOOLS" in tag.upper():
+                    from_srctools = True
+                    break
+            if not from_srctools:
+                extend_ent = EntityDef(type=EntityTypes.EXTEND, classname=ent.classname)
+                for attr_name in ('keyvalues', 'inputs', 'outputs'):
+                    old_cat = getattr(ent, attr_name)
+                    new_cat = getattr(extend_ent, attr_name)
+                    for key, tag_map in old_cat.items():
+                        for tag, value in tag_map.items():
+                            if "ENGINE" in tags:
+                                continue
+                            if "!SRCTOOLS" in tags or "!srctools" in tags:
+                                continue
+                            if 'SRCTOOLS' not in tag and '+SRCTOOLS' not in tag:
+                                # Ignoring all non-SRCTOOLS tags!
+                                continue
+                            # Track it!
+                            if key not in new_cat.keys():
+                                new_cat[key] = {}
+                            new_cat[key][add_tag(tag, '+SRCTOOLS')] = value
+                            extend_any = True
+                # Replace it with our new one in the final output
+                if extend_any:
+                    ent = extend_ent
+            print("\t", "E" if extend_any else ".", "\t", classname)
+
+            # Strip tags from all ents
+            ent.strip_tags(tags)
+            fgd.entities[classname] = ent
+
+    print('Culling unused bases...')
+    used_bases: set[EntityDef] = set()
+    # We only want to keep bases that provide keyvalues. We've merged the
+    # helpers in.
+    for ent in fgd.entities.values():
+        if ent.type is not EntityTypes.BASE:
+            for base in ent.iter_bases():
+                if base.type is EntityTypes.BASE and (
+                    base.keyvalues or base.inputs or base.outputs
+                ):
+                    used_bases.add(base)
+
+    for classname, ent in list(fgd.entities.items()):
+        if ent.type is EntityTypes.BASE:
+            if ent not in used_bases and ent is not base_entity_def:
+                del fgd.entities[classname]
+                continue
+            else:
+                # Helpers aren't inherited, so this isn't useful any more.
+                ent.helpers.clear()
+        # Cull all base classes we don't use.
+        # Ents that inherit from each other always need to exist.
+        # We also need to replace bases with their parent, if culled.
+        todo = ent.bases.copy()
+        done = set(todo)
+        ent.bases.clear()
+        for base in todo:
+            assert isinstance(base, EntityDef), base
+            if base.type is not EntityTypes.BASE or base in used_bases:
+                ent.bases.append(base)
+            else:
+                for subbase in base.bases:
+                    if subbase not in done:
+                        todo.append(subbase)
 
     print('Applying helpers to child entities and optimising...')
     for ent in fgd.entities.values():
@@ -1518,40 +1596,7 @@ def action_export(
             rev_helpers.append(helper)
         ent.helpers = rev_helpers[::-1]
 
-    print('Culling unused bases...')
-    used_bases: set[EntityDef] = set()
-    # We only want to keep bases that provide keyvalues. We've merged the
-    # helpers in.
-    for ent in fgd.entities.values():
-        if ent.type is not EntityTypes.BASE:
-            for base in ent.iter_bases():
-                if base.type is EntityTypes.BASE and (
-                    base.keyvalues or base.inputs or base.outputs
-                ):
-                    used_bases.add(base)
 
-    for classname, ent in list(fgd.entities.items()):
-        if ent.type is EntityTypes.BASE:
-            if ent not in used_bases and ent is not base_entity_def:
-                del fgd.entities[classname]
-                continue
-            else:
-                # Helpers aren't inherited, so this isn't useful any more.
-                ent.helpers.clear()
-        # Cull all base classes we don't use.
-        # Ents that inherit from each other always need to exist.
-        # We also need to replace bases with their parent, if culled.
-        todo = ent.bases.copy()
-        done = set(todo)
-        ent.bases.clear()
-        for base in todo:
-            assert isinstance(base, EntityDef), base
-            if base.type is not EntityTypes.BASE or base in used_bases:
-                ent.bases.append(base)
-            else:
-                for subbase in base.bases:
-                    if subbase not in done:
-                        todo.append(subbase)
 
     print('Merging in material exclusions...')
     for mat_tags, materials in fgd.tagged_mat_exclusions.items():
