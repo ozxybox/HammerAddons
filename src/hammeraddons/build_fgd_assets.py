@@ -20,7 +20,7 @@ def action_build(input_path: Path, output_path: Path, asset_path: Path) -> None:
     fgd_fsys = RawFileSystem(str(input_path.parent))
     asset_fsys = RawFileSystem(str(asset_path))
     fgd = FGD()
-    fgd.parse_file(fgd_fsys, fgd_fsys[str(input_path)], eval_bases=False, eval_extensions=False)
+    fgd.parse_file(fgd_fsys, fgd_fsys[str(input_path)], eval_bases=False, eval_extensions=False, encoding='iso-8859-1')
     pack = PackList(asset_fsys)
 
     # Iterate over all entries, build a list of assets
