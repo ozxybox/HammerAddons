@@ -17,7 +17,6 @@ from srctools.packlist import PackList
 def action_build(input_path: Path, output_path: Path, asset_path: Path) -> None:
 
     # Import the FGD
-    print(input_path.parent)
     fgd_fsys = RawFileSystem(str(input_path.parent))
     asset_fsys = RawFileSystem(str(asset_path))
     fgd = FGD()
